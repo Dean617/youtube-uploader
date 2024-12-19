@@ -1,0 +1,96 @@
+import os
+import time
+import schedule
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import pickle
+from datetime import datetime
+
+# OAuth 2.0 Scopes required for YouTube API
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+# Path to your client secrets file
+CLIENT_SECRETS_FILE = "client_secrets.json"
+
+# Authenticate and get the API client
+def get_authenticated_service():
+    credentials = None
+    if os.path.exists("token.pickle"):
+        with open("token.pickle", "rb") as token:
+            credentials = pickle.load(token)
+
+    if not credentials or not credentials.valid:
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
+            credentials = flow.run_local_server(port=0)
+
+        with open("token.pickle", "wb") as token:
+            pickle.dump(credentials, token)
+
+    return build("youtube", "v3", credentials=credentials)
+
+# Function to upload a video
+def upload_video(video_path, title, description):
+    youtube = get_authenticated_service()
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body={
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": ["sample", "video", "upload"],
+                "categoryId": "22",  # 22 corresponds to 'People & Blogs'
+            },
+            "status": {
+                "privacyStatus": "public",  # or "private" / "unlisted"
+            },
+        },
+        media_body=MediaFileUpload(video_path, chunksize=-1, resumable=True),
+    )
+
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Uploaded {int(status.progress() * 100)}%.")
+
+    print("Video uploaded successfully:", response["snippet"]["title"])
+
+# Function to repeatedly upload videos
+def scheduled_upload():
+    video_path = "path/to/your/video.mp4"
+    title = f"Scheduled Upload - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    description = "This is an automatically uploaded video."
+    upload_video(video_path, title, description)
+
+# Schedule settings
+def start_scheduler(start_time, end_time, interval_minutes):
+    schedule.every().day.at(start_time).do(run_repeated_uploads, end_time, interval_minutes)
+    print(f"Scheduler started. First run at {start_time}")
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+def run_repeated_uploads(end_time, interval_minutes):
+    end = datetime.strptime(end_time, "%H:%M").time()
+    now = datetime.now().time()
+
+    while now < end:
+        scheduled_upload()
+        print(f"Next upload in {interval_minutes} minutes.")
+        time.sleep(interval_minutes * 60)
+        now = datetime.now().time()
+
+# Main function
+if __name__ == "__main__":
+    # Define the start time, end time, and interval between uploads in minutes
+    start_time = "09:00"
+    end_time = "17:00"
+    interval_minutes = 60
+
+    start_scheduler(start_time, end_time, interval_minutes)
